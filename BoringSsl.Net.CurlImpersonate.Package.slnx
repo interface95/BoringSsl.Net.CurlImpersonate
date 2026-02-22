@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BoringSsl.Net.CurlImpersonate/BoringSsl.Net.CurlImpersonate.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BoringSsl.Net.CurlImpersonate.IntegrationTests/BoringSsl.Net.CurlImpersonate.IntegrationTests.csproj" />
+    <Project Path="tests/BoringSsl.Net.CurlImpersonate.UnitTests/BoringSsl.Net.CurlImpersonate.UnitTests.csproj" />
+  </Folder>
+</Solution>

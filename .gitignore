@@ -1,0 +1,14 @@
+bin/
+obj/
+artifacts/
+.vs/
+.idea/
+.work/
+*.user
+*.suo
+*.DS_Store
+TestResults/
+
+# Native build outputs
+native/curl_impersonate_shim/build/
+

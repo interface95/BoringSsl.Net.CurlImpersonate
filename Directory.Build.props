@@ -1,0 +1,21 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>preview</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <RepositoryUrl>https://github.com/example/BoringSsl.Net</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Authors>BoringSsl.Net</Authors>
+    <Company>BoringSsl.Net</Company>
+    <PackageProjectUrl>https://github.com/example/BoringSsl.Net</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>20 20 101 12 61 79 80 81 33 98 100 204 250 395 398 399 400 701NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+</Project>
