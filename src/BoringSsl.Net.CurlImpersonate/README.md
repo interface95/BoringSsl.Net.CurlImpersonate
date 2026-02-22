@@ -103,6 +103,31 @@ When exact profile lock is required:
 
 - use `Strict`.
 
+## Runtime Health Probe and Fallback
+
+Probe runtime:
+
+```csharp
+var status = CurlImpersonateRuntime.GetStatus(includePaths: false);
+Console.WriteLine($"runtime={status.IsAvailable}, reason={status.Reason}");
+```
+
+Require runtime at startup:
+
+```csharp
+CurlImpersonateRuntime.EnsureAvailableOrThrow();
+```
+
+Auto fallback to non-impersonate handler:
+
+```csharp
+using var handler = CurlImpersonateHttpHandlerFactory.CreateOrFallback(
+    fallbackHandlerFactory: static () => new SocketsHttpHandler(),
+    impersonateTarget: "chrome142",
+    timeoutMs: 30_000,
+    strictRuntime: false);
+```
+
 ## Integration Tests
 
 Build shim (host platform):

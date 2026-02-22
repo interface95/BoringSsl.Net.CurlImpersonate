@@ -1,6 +1,7 @@
 # BoringSsl.Net.CurlImpersonate Workspace
 
-[![CI](https://img.shields.io/badge/CI-not%20configured-lightgrey)](https://github.com/interface95/BoringSsl.Net.CurlImpersonate/actions)
+[![CI](https://github.com/interface95/BoringSsl.Net.CurlImpersonate/actions/workflows/ci.yml/badge.svg)](https://github.com/interface95/BoringSsl.Net.CurlImpersonate/actions/workflows/ci.yml)
+[![Publish Preview](https://github.com/interface95/BoringSsl.Net.CurlImpersonate/actions/workflows/publish-preview.yml/badge.svg)](https://github.com/interface95/BoringSsl.Net.CurlImpersonate/actions/workflows/publish-preview.yml)
 [![NuGet](https://img.shields.io/nuget/vpre/BoringSsl.Net.CurlImpersonate)](https://www.nuget.org/packages/BoringSsl.Net.CurlImpersonate)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/BoringSsl.Net.CurlImpersonate)](https://www.nuget.org/packages/BoringSsl.Net.CurlImpersonate)
 
@@ -79,6 +80,31 @@ using var client = new HttpClient(
     disposeHandler: true);
 ```
 
+## Runtime Health and Automatic Fallback
+
+Health probe:
+
+```csharp
+using BoringSsl.Net.CurlImpersonate;
+
+var status = CurlImpersonateRuntime.GetStatus(includePaths: false);
+Console.WriteLine($"Runtime OK: {status.IsAvailable}, reason: {status.Reason}");
+```
+
+Create handler with automatic fallback:
+
+```csharp
+using BoringSsl.Net.CurlImpersonate;
+
+using var handler = CurlImpersonateHttpHandlerFactory.CreateOrFallback(
+    fallbackHandlerFactory: static () => new SocketsHttpHandler(),
+    impersonateTarget: "chrome142",
+    timeoutMs: 30_000,
+    profilePolicy: CurlImpersonateProfilePolicy.PreferLower,
+    profileCandidates: ["chrome142", "chrome136", "chrome133a", "chrome116"],
+    strictRuntime: false);
+```
+
 ## 5-Minute Smoke Test
 
 1) Build shim:
@@ -122,6 +148,10 @@ Policy behavior summary:
 - `strict`: unsupported target fails immediately.
 - `prefer-lower`: fallback to nearest lower supported profile, then highest available.
 - `highest-available`: always choose best available from candidate list.
+
+Production gate checklist:
+
+- `docs/PRODUCTION_READINESS.md`
 
 Full package API guide is in:
 
