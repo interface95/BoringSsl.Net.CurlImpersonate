@@ -86,6 +86,23 @@ response.EnsureSuccessStatusCode();
 await using var stream = await response.Content.ReadAsStreamAsync(CancellationToken.None);
 ```
 
+## Runtime/Profile Recommendations
+
+Suggested baseline:
+
+- target: `chrome142`
+- policy: `PreferLower`
+- candidates: `chrome142,chrome136,chrome133a,chrome116`
+
+When runtime may lag behind latest profile:
+
+- switch policy to `HighestAvailable`, or
+- keep `PreferLower` and provide a descending candidate list.
+
+When exact profile lock is required:
+
+- use `Strict`.
+
 ## Integration Tests
 
 Build shim (host platform):
@@ -106,6 +123,18 @@ CURL_IMPERSONATE_TARGET=chrome142 \
 BSSL_CURL_SHIM_LIB=<abs_path_to_shim_library> \
 BSSL_CURL_IMPERSONATE_LIB=<abs_path_to_libcurl-impersonate-library> \
 dotnet test tests/BoringSsl.Net.CurlImpersonate.IntegrationTests/BoringSsl.Net.CurlImpersonate.IntegrationTests.csproj -f net10.0 -c Release
+```
+
+Single smoke test:
+
+```bash
+RUN_CURL_IMPERSONATE_INTEGRATION_TESTS=1 \
+CURL_IMPERSONATE_TARGET=chrome142 \
+BSSL_CURL_SHIM_LIB=<abs_path_to_shim_library> \
+BSSL_CURL_IMPERSONATE_LIB=<abs_path_to_libcurl-impersonate-library> \
+dotnet test tests/BoringSsl.Net.CurlImpersonate.IntegrationTests/BoringSsl.Net.CurlImpersonate.IntegrationTests.csproj \
+  -f net10.0 -c Release \
+  --filter "FullyQualifiedName~HttpsGet_HttpBin_Returns200"
 ```
 
 ## Troubleshooting

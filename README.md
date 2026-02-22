@@ -1,5 +1,9 @@
 # BoringSsl.Net.CurlImpersonate Workspace
 
+[![CI](https://img.shields.io/badge/CI-not%20configured-lightgrey)](https://github.com/interface95/BoringSsl.Net.CurlImpersonate/actions)
+[![NuGet](https://img.shields.io/nuget/vpre/BoringSsl.Net.CurlImpersonate)](https://www.nuget.org/packages/BoringSsl.Net.CurlImpersonate)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/BoringSsl.Net.CurlImpersonate)](https://www.nuget.org/packages/BoringSsl.Net.CurlImpersonate)
+
 Standalone package workspace for `BoringSsl.Net.CurlImpersonate`.
 
 This repository focuses on one reusable package:
@@ -74,6 +78,50 @@ using var client = new HttpClient(
     new CurlImpersonateForwarderHandler(executor, impersonateTarget: "chrome142", timeoutMs: 30_000),
     disposeHandler: true);
 ```
+
+## 5-Minute Smoke Test
+
+1) Build shim:
+
+```bash
+./build/build-curl-impersonate-shim.sh
+```
+
+2) Run one external integration test:
+
+```bash
+RUN_CURL_IMPERSONATE_INTEGRATION_TESTS=1 \
+CURL_IMPERSONATE_TARGET=chrome142 \
+BSSL_CURL_SHIM_LIB=/absolute/path/to/libboringssl_net_curlimp_shim.so \
+BSSL_CURL_IMPERSONATE_LIB=/absolute/path/to/libcurl-impersonate-chrome.so \
+dotnet test tests/BoringSsl.Net.CurlImpersonate.IntegrationTests/BoringSsl.Net.CurlImpersonate.IntegrationTests.csproj \
+  -f net10.0 -c Release \
+  --filter "FullyQualifiedName~HttpsGet_HttpBin_Returns200"
+```
+
+Expected output (key lines):
+
+```text
+Passed!  - Failed: 0, Passed: 1, Skipped: 0
+```
+
+## Runtime/Profile Matrix
+
+Recommended defaults for production-like behavior:
+
+| Scenario | `CURL_IMPERSONATE_TARGET` | `--curl-impersonate-policy` | Candidate list |
+|---|---|---|---|
+| Linux x64/arm64 server | `chrome142` | `prefer-lower` | `chrome142,chrome136,chrome133a,chrome116` |
+| macOS dev machine | `chrome142` | `prefer-lower` | `chrome142,chrome136,chrome133a,chrome116` |
+| Windows dev/test | `chrome142` | `prefer-lower` | `chrome142,chrome136,chrome133a,chrome116` |
+| Runtime is old/unknown | requested latest | `highest-available` | keep full default list |
+| Strict fingerprint lock | exact target | `strict` | include only allowed profiles |
+
+Policy behavior summary:
+
+- `strict`: unsupported target fails immediately.
+- `prefer-lower`: fallback to nearest lower supported profile, then highest available.
+- `highest-available`: always choose best available from candidate list.
 
 Full package API guide is in:
 
