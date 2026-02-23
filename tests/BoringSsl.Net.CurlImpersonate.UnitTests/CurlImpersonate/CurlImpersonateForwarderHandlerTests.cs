@@ -46,7 +46,16 @@ public sealed class CurlImpersonateForwarderHandlerTests
         Assert.Equal(new Uri("https://example.com/v1/test?x=1"), fakeExecutor.LastRequest.Uri);
         Assert.Equal("chrome136", fakeExecutor.LastRequest.ImpersonateTarget);
         Assert.Equal(45_000, fakeExecutor.LastRequest.TimeoutMs);
-        Assert.Equal("hello", Encoding.UTF8.GetString(fakeExecutor.LastRequest.Body.Span));
+        Assert.True(fakeExecutor.LastRequest.HasBody);
+        Assert.Equal(5, fakeExecutor.LastRequest.BodyLength);
+        await using (var uploadStream = await fakeExecutor.LastRequest.OpenBodyStreamAsync(CancellationToken.None))
+        {
+            Assert.NotNull(uploadStream);
+            using var reader = new StreamReader(uploadStream!, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: false);
+            var uploadPayload = await reader.ReadToEndAsync();
+            Assert.Equal("hello", uploadPayload);
+        }
+
         Assert.Contains(fakeExecutor.LastRequest.Headers, static header => header.Name == "X-Trace-Id" && header.Value == "trace-1");
         Assert.Contains(fakeExecutor.LastRequest.Headers, static header => header.Name == "Host" && header.Value == "example.com");
         Assert.Contains(fakeExecutor.LastRequest.Headers, static header => header.Name == "Content-Type" && header.Value == "application/json");

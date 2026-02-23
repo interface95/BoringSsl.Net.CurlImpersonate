@@ -20,18 +20,24 @@ public sealed class CurlImpersonateForwarderHandler(
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var requestUri = request.RequestUri ?? throw new InvalidOperationException("Request URI is required.");
-        var body = request.Content is null
-            ? ReadOnlyMemory<byte>.Empty
-            : await request.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+        var bodyLength = request.Content?.Headers.ContentLength;
+        Func<CancellationToken, ValueTask<Stream>>? bodyStreamFactory = null;
+        if (request.Content is not null)
+        {
+            var content = request.Content;
+            bodyStreamFactory = ct => new ValueTask<Stream>(content.ReadAsStreamAsync(ct));
+        }
 
         var headers = BuildRequestHeaders(request);
         var curlRequest = new CurlImpersonateRequest(
             method: request.Method.Method,
             uri: requestUri,
             headers: headers,
-            body: body,
+            body: ReadOnlyMemory<byte>.Empty,
             impersonateTarget: impersonateTarget,
-            timeoutMs: timeoutMs);
+            timeoutMs: timeoutMs,
+            bodyStreamFactory: bodyStreamFactory,
+            bodyLength: bodyLength);
 
         if (executor is ICurlImpersonateStreamingExecutor streamingExecutor)
         {

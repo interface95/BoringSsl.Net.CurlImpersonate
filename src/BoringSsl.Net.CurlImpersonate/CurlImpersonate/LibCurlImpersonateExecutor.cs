@@ -21,9 +21,11 @@ public sealed class LibCurlImpersonateExecutor(
     private static readonly Dictionary<string, RuntimeCapabilityCache> RuntimeCapabilityCaches = new(StringComparer.Ordinal);
     private static bool _globalInitialized;
     private static long _requestSequence;
+    private static readonly nuint CurlReadFuncAbort = unchecked((nuint)(nint)(-1));
     private static readonly CurlMultiDispatcher MultiDispatcher = new();
     private static readonly CurlNative.CurlWriteCallback WriteBodyCallback = OnWriteBody;
     private static readonly CurlNative.CurlWriteCallback WriteHeaderCallback = OnWriteHeader;
+    private static readonly CurlNative.CurlWriteCallback ReadBodyCallback = OnReadBody;
     private static readonly CurlNative.CurlXferInfoCallback XferInfoCallback = OnXferInfo;
 
     private readonly Lock _poolLock = new();
@@ -77,7 +79,7 @@ public sealed class LibCurlImpersonateExecutor(
 
         var pipe = new Pipe();
         var transferState = new CurlTransferState(cancellationToken);
-        var transfer = PrepareTransfer(request, transferState);
+        var transfer = await PrepareTransferAsync(request, transferState, cancellationToken).ConfigureAwait(false);
 
         var completion = RunTransferAsync(transfer, pipe.Writer, cancellationToken, logContext, startedAt);
         ObserveFaults(completion);
@@ -118,7 +120,10 @@ public sealed class LibCurlImpersonateExecutor(
         }
     }
 
-    private PreparedTransfer PrepareTransfer(CurlImpersonateRequest request, CurlTransferState transferState)
+    private async Task<PreparedTransfer> PrepareTransferAsync(
+        CurlImpersonateRequest request,
+        CurlTransferState transferState,
+        CancellationToken cancellationToken)
     {
         var easyHandle = RentEasyHandle();
         var transfer = new PreparedTransfer(easyHandle, transferState);
@@ -156,22 +161,10 @@ public sealed class LibCurlImpersonateExecutor(
                 SetOpt(easyHandle, CurlOption.HttpHeader, transfer.HeaderList);
             }
 
-            if (!request.Body.IsEmpty)
+            if (request.HasBody)
             {
-                transfer.RequestBodyPtr = Marshal.AllocHGlobal(request.Body.Length);
-                if (MemoryMarshal.TryGetArray(request.Body, out var bodySegment) &&
-                    bodySegment.Array is not null)
-                {
-                    Marshal.Copy(bodySegment.Array, bodySegment.Offset, transfer.RequestBodyPtr, request.Body.Length);
-                }
-                else
-                {
-                    var bodyBytes = request.Body.ToArray();
-                    Marshal.Copy(bodyBytes, 0, transfer.RequestBodyPtr, bodyBytes.Length);
-                }
-
-                SetOpt(easyHandle, CurlOption.PostFields, transfer.RequestBodyPtr);
-                SetOpt(easyHandle, CurlOption.PostFieldSizeLarge, request.Body.Length);
+                await ConfigureRequestBodyAsync(request, transferState, transferStatePtr, easyHandle, cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             var resolvedTarget = ResolveImpersonationTarget(request.ImpersonateTarget);
@@ -183,6 +176,33 @@ public sealed class LibCurlImpersonateExecutor(
         {
             CleanupTransfer(transfer);
             throw;
+        }
+    }
+
+    private static async Task ConfigureRequestBodyAsync(
+        CurlImpersonateRequest request,
+        CurlTransferState transferState,
+        IntPtr transferStatePtr,
+        IntPtr easyHandle,
+        CancellationToken cancellationToken)
+    {
+        var requestBodyStream = await request.OpenBodyStreamAsync(cancellationToken).ConfigureAwait(false);
+        if (requestBodyStream is null)
+            return;
+
+        transferState.SetRequestBodyStream(requestBodyStream, request.BodyLength);
+        SetOpt(easyHandle, CurlOption.ReadFunction, ReadBodyCallback);
+        SetOpt(easyHandle, CurlOption.ReadData, transferStatePtr);
+
+        if (string.Equals(request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+            SetOpt(easyHandle, CurlOption.Post, 1L);
+        else
+            SetOpt(easyHandle, CurlOption.Upload, 1L);
+
+        if (request.BodyLength.HasValue)
+        {
+            SetOpt(easyHandle, CurlOption.InFileSizeLarge, request.BodyLength.Value);
+            SetOpt(easyHandle, CurlOption.PostFieldSizeLarge, request.BodyLength.Value);
         }
     }
 
@@ -298,13 +318,15 @@ public sealed class LibCurlImpersonateExecutor(
     {
         var requestId = Interlocked.Increment(ref _requestSequence);
         var target = request.Uri.GetLeftPart(UriPartial.Path);
+        var requestBytes = request.BodyLength
+            ?? (!request.Body.IsEmpty ? request.Body.Length : (request.HasBody ? -1 : 0));
         return new RequestLogContext(
             requestId,
             request.Method,
             target,
             request.TimeoutMs,
             request.Headers.Count,
-            request.Body.Length);
+            requestBytes);
     }
 
     private void LogRequestStart(RequestLogContext context)
@@ -433,10 +455,7 @@ public sealed class LibCurlImpersonateExecutor(
             transfer.StateHandle.Free();
         }
 
-        if (transfer.RequestBodyPtr != IntPtr.Zero)
-        {
-            Marshal.FreeHGlobal(transfer.RequestBodyPtr);
-        }
+        transfer.State.DisposeRequestBodyResources();
 
         if (transfer.HeaderList != IntPtr.Zero)
         {
@@ -833,6 +852,23 @@ public sealed class LibCurlImpersonateExecutor(
         });
     }
 
+    private static nuint OnReadBody(IntPtr buffer, nuint size, nuint nItems, IntPtr userData)
+    {
+        if (!TryGetTransferState(buffer, size, nItems, userData, out var state, out var totalSize))
+            return 0;
+
+        try
+        {
+            var bytesRead = state.ReadRequestBody(buffer, totalSize);
+            return bytesRead >= 0 ? (nuint)bytesRead : CurlReadFuncAbort;
+        }
+        catch (Exception ex)
+        {
+            state.SetCallbackException(ex);
+            return CurlReadFuncAbort;
+        }
+    }
+
     private static int OnXferInfo(
         IntPtr userData,
         long downloadTotal,
@@ -926,16 +962,19 @@ public sealed class LibCurlImpersonateExecutor(
 
         public IntPtr HeaderList { get; set; }
 
-        public IntPtr RequestBodyPtr { get; set; }
-
         public GCHandle StateHandle { get; set; }
     }
 
     private sealed class CurlTransferState(CancellationToken cancellationToken)
     {
+        private const int UploadBufferSize = 64 * 1024;
+
         private readonly CancellationToken _cancellationToken = cancellationToken;
         private Exception? _callbackException;
         private long _responseBodyBytes;
+        private long _uploadedBodyBytes;
+        private Stream? _requestBodyStream;
+        private byte[]? _uploadBuffer;
 
         public List<string> RawHeaderLines { get; } = [];
 
@@ -956,9 +995,36 @@ public sealed class LibCurlImpersonateExecutor(
 
         public long ResponseBodyBytes => Interlocked.Read(ref _responseBodyBytes);
 
+        public long UploadedBodyBytes => Interlocked.Read(ref _uploadedBodyBytes);
+
         public void SetCallbackException(Exception exception)
         {
             Interlocked.CompareExchange(ref _callbackException, exception, null);
+        }
+
+        public void SetRequestBodyStream(Stream stream, long? length)
+        {
+            _ = length;
+            _requestBodyStream = stream;
+            _uploadBuffer = ArrayPool<byte>.Shared.Rent(UploadBufferSize);
+        }
+
+        public int ReadRequestBody(IntPtr destination, int requestedBytes)
+        {
+            if (_requestBodyStream is null || _uploadBuffer is null)
+                return 0;
+
+            var readSize = Math.Min(requestedBytes, _uploadBuffer.Length);
+            if (readSize <= 0)
+                return 0;
+
+            var bytesRead = _requestBodyStream.Read(_uploadBuffer, 0, readSize);
+            if (bytesRead <= 0)
+                return 0;
+
+            Marshal.Copy(_uploadBuffer, 0, destination, bytesRead);
+            Interlocked.Add(ref _uploadedBodyBytes, bytesRead);
+            return bytesRead;
         }
 
         public void WriteBody(IntPtr source, int length)
@@ -983,6 +1049,18 @@ public sealed class LibCurlImpersonateExecutor(
             }
 
             BodyChunks.Writer.TryComplete(error);
+        }
+
+        public void DisposeRequestBodyResources()
+        {
+            _requestBodyStream?.Dispose();
+            _requestBodyStream = null;
+
+            if (_uploadBuffer is null)
+                return;
+
+            ArrayPool<byte>.Shared.Return(_uploadBuffer);
+            _uploadBuffer = null;
         }
     }
 
@@ -1223,7 +1301,7 @@ public sealed class LibCurlImpersonateExecutor(
         string Target,
         int TimeoutMs,
         int HeaderCount,
-        int RequestBytes);
+        long RequestBytes);
 
     private enum CurlCode
     {
@@ -1257,12 +1335,17 @@ public sealed class LibCurlImpersonateExecutor(
         Url = 10002,
         CustomRequest = 10036,
         HttpHeader = 10023,
+        Upload = 46,
+        Post = 47,
         HttpVersion = 84,
+        ReadFunction = 20012,
+        ReadData = 10009,
         WriteFunction = 20011,
         WriteData = 10001,
         HeaderFunction = 20079,
         HeaderData = 10029,
         PostFields = 10015,
+        InFileSizeLarge = 30115,
         PostFieldSizeLarge = 30120,
         TimeoutMs = 155,
         FollowLocation = 52,
