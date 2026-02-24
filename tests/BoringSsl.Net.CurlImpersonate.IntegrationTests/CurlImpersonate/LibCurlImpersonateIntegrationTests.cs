@@ -89,6 +89,18 @@ public sealed class LibCurlImpersonateIntegrationTests
     }
 
     [CurlIntegrationFact]
+    public async Task Http2Validation_HttpResponseVersion_Is20()
+    {
+        using var executor = new LibCurlImpersonateExecutor();
+        using var client = CreateClient(executor);
+
+        using var response = await client.GetAsync("https://tls.peet.ws/api/all");
+        response.EnsureSuccessStatusCode();
+
+        Assert.Equal(HttpVersion.Version20, response.Version);
+    }
+
+    [CurlIntegrationFact]
     public async Task StreamingResponse_SseEndpoint_CanReadChunks()
     {
         using var executor = new LibCurlImpersonateExecutor();

@@ -4,7 +4,8 @@ public sealed class CurlImpersonateResponse(
     int statusCode,
     string reasonPhrase,
     IReadOnlyList<CurlImpersonateHeader> headers,
-    byte[] body)
+    byte[] body,
+    Version protocolVersion)
 {
     public int StatusCode { get; } = statusCode;
 
@@ -13,4 +14,6 @@ public sealed class CurlImpersonateResponse(
     public IReadOnlyList<CurlImpersonateHeader> Headers { get; } = headers;
 
     public byte[] Body { get; } = body;
+
+    public Version ProtocolVersion { get; } = protocolVersion;
 }

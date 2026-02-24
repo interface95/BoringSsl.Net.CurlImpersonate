@@ -21,6 +21,7 @@ public sealed class CurlResponseHeaderParserTests
 
         Assert.Equal(200, parsed.StatusCode);
         Assert.Equal("OK", parsed.ReasonPhrase);
+        Assert.Equal(new Version(2, 0), parsed.ProtocolVersion);
         Assert.Equal(2, parsed.Headers.Count);
         Assert.Contains(parsed.Headers, static header => header.Name == "content-type" && header.Value == "application/json");
         Assert.Contains(parsed.Headers, static header => header.Name == "x-test" && header.Value == "value");
@@ -41,6 +42,7 @@ public sealed class CurlResponseHeaderParserTests
 
         Assert.Equal(204, parsed.StatusCode);
         Assert.Equal("No Content", parsed.ReasonPhrase);
+        Assert.Equal(new Version(1, 1), parsed.ProtocolVersion);
         Assert.Single(parsed.Headers);
         Assert.Equal("x-valid", parsed.Headers[0].Name);
         Assert.Equal("ok", parsed.Headers[0].Value);

@@ -4,7 +4,8 @@ public sealed class CurlImpersonateStreamingResponse(
     int statusCode,
     string reasonPhrase,
     IReadOnlyList<CurlImpersonateHeader> headers,
-    Stream body)
+    Stream body,
+    Version protocolVersion)
 {
     public int StatusCode { get; } = statusCode;
 
@@ -13,4 +14,6 @@ public sealed class CurlImpersonateStreamingResponse(
     public IReadOnlyList<CurlImpersonateHeader> Headers { get; } = headers;
 
     public Stream Body { get; } = body;
+
+    public Version ProtocolVersion { get; } = protocolVersion;
 }

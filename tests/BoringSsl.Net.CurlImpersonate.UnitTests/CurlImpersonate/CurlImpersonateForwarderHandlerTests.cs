@@ -19,7 +19,8 @@ public sealed class CurlImpersonateForwarderHandlerTests
                 new CurlImpersonateHeader("Connection", "close"),
                 new CurlImpersonateHeader("Content-Length", "999"),
             ],
-            body: Encoding.UTF8.GetBytes("{\"ok\":true}")));
+            body: Encoding.UTF8.GetBytes("{\"ok\":true}"),
+            protocolVersion: HttpVersion.Version20));
 
         using var handler = new CurlImpersonateForwarderHandler(fakeExecutor, impersonateTarget: "chrome136", timeoutMs: 45_000);
         using var invoker = new HttpMessageInvoker(handler);
@@ -36,6 +37,7 @@ public sealed class CurlImpersonateForwarderHandlerTests
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         Assert.Equal("Created", response.ReasonPhrase);
+        Assert.Equal(HttpVersion.Version20, response.Version);
         Assert.Equal("{\"ok\":true}", responseBody);
         Assert.True(response.Headers.Contains("X-Upstream"));
         Assert.False(response.Headers.Contains("Connection"));
@@ -71,8 +73,10 @@ public sealed class CurlImpersonateForwarderHandlerTests
             [
                 new CurlImpersonateHeader("Content-Type", "text/event-stream"),
                 new CurlImpersonateHeader("X-Stream", "yes"),
+                new CurlImpersonateHeader("Content-Length", "5"),
             ],
-            body: new MemoryStream(Encoding.UTF8.GetBytes("data: hello\n\n"), writable: false)));
+            body: new MemoryStream(Encoding.UTF8.GetBytes("data: hello\n\n"), writable: false),
+            protocolVersion: HttpVersion.Version20));
 
         using var handler = new CurlImpersonateForwarderHandler(fakeExecutor, impersonateTarget: "chrome136", timeoutMs: 30_000);
         using var invoker = new HttpMessageInvoker(handler);
@@ -83,15 +87,17 @@ public sealed class CurlImpersonateForwarderHandlerTests
 
         Assert.True(fakeExecutor.StreamingPathUsed);
         Assert.Equal("data: hello\n\n", responseBody);
+        Assert.Equal(HttpVersion.Version20, response.Version);
         Assert.True(response.Headers.Contains("X-Stream"));
         Assert.Equal("text/event-stream", response.Content.Headers.ContentType?.MediaType);
+        Assert.NotEqual(5, response.Content.Headers.ContentLength);
     }
 
     [Fact]
     public async Task SendAsync_Throws_WhenRequestUriMissing()
     {
         using var handler = new CurlImpersonateForwarderHandler(
-            new FakeCurlImpersonateExecutor(new CurlImpersonateResponse(200, "OK", [], [])),
+            new FakeCurlImpersonateExecutor(new CurlImpersonateResponse(200, "OK", [], [], HttpVersion.Version20)),
             impersonateTarget: "chrome116",
             timeoutMs: 30_000);
 

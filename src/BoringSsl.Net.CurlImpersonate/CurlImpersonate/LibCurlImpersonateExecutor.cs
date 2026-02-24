@@ -3,6 +3,7 @@ namespace BoringSsl.Net.CurlImpersonate;
 using System.Buffers;
 using System.Diagnostics;
 using System.IO.Pipelines;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Channels;
@@ -62,7 +63,8 @@ public sealed class LibCurlImpersonateExecutor(
             statusCode: streamingResponse.StatusCode,
             reasonPhrase: streamingResponse.ReasonPhrase,
             headers: streamingResponse.Headers,
-            body: buffer.ToArray());
+            body: buffer.ToArray(),
+            protocolVersion: streamingResponse.ProtocolVersion);
     }
 
     public async Task<CurlImpersonateStreamingResponse> ExecuteStreamingAsync(
@@ -91,7 +93,8 @@ public sealed class LibCurlImpersonateExecutor(
                 statusCode: headers.StatusCode,
                 reasonPhrase: headers.ReasonPhrase,
                 headers: headers.Headers,
-                body: pipe.Reader.AsStream());
+                body: pipe.Reader.AsStream(),
+                protocolVersion: headers.ProtocolVersion);
         }
         catch
         {
@@ -138,7 +141,7 @@ public sealed class LibCurlImpersonateExecutor(
             SetOpt(easyHandle, CurlOption.TimeoutMs, request.TimeoutMs);
             SetOpt(easyHandle, CurlOption.FollowLocation, 0L);
             SetOpt(easyHandle, CurlOption.NoSignal, 1L);
-            SetOpt(easyHandle, CurlOption.AcceptEncoding, string.Empty);
+            SetOpt(easyHandle, CurlOption.AcceptEncoding, "identity");
             SetOpt(easyHandle, CurlOption.WriteFunction, WriteBodyCallback);
             SetOpt(easyHandle, CurlOption.WriteData, transferStatePtr);
             SetOpt(easyHandle, CurlOption.HeaderFunction, WriteHeaderCallback);
@@ -163,6 +166,11 @@ public sealed class LibCurlImpersonateExecutor(
 
             if (request.HasBody)
             {
+                // 禁止 curl 自动添加 Expect: 100-continue
+                transfer.HeaderList = CurlNative.SListAppend(transfer.HeaderList, "Expect:");
+                if (transfer.HeaderList != IntPtr.Zero)
+                    SetOpt(easyHandle, CurlOption.HttpHeader, transfer.HeaderList);
+
                 await ConfigureRequestBodyAsync(request, transferState, transferStatePtr, easyHandle, cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -194,6 +202,9 @@ public sealed class LibCurlImpersonateExecutor(
         SetOpt(easyHandle, CurlOption.ReadFunction, ReadBodyCallback);
         SetOpt(easyHandle, CurlOption.ReadData, transferStatePtr);
 
+        // 对于 POST，使用 CURLOPT_POST 保持正确的 :method 伪头。
+        // CURLOPT_UPLOAD 会把方法改成 PUT，在 HTTP/2 下即使设了 CUSTOMREQUEST 也可能不生效。
+        // Expect: 100-continue 已通过空 Expect: header 禁止。
         if (string.Equals(request.Method, "POST", StringComparison.OrdinalIgnoreCase))
             SetOpt(easyHandle, CurlOption.Post, 1L);
         else
@@ -439,13 +450,14 @@ public sealed class LibCurlImpersonateExecutor(
     private static HeaderSnapshot CreateHeaderSnapshot(IReadOnlyList<string> rawHeaderLines, IntPtr easyHandle)
     {
         var statusCode = GetStatusCode(easyHandle);
-        var (parsedStatusCode, reasonPhrase, headers) = CurlResponseHeaderParser.Parse(rawHeaderLines);
+        var protocolVersion = GetProtocolVersion(easyHandle);
+        var (parsedStatusCode, reasonPhrase, parsedProtocolVersion, headers) = CurlResponseHeaderParser.Parse(rawHeaderLines);
         if (parsedStatusCode > 0)
         {
             statusCode = parsedStatusCode;
         }
 
-        return new HeaderSnapshot(statusCode, reasonPhrase, headers);
+        return new HeaderSnapshot(statusCode, reasonPhrase, parsedProtocolVersion ?? protocolVersion, headers);
     }
 
     private void CleanupTransfer(PreparedTransfer transfer)
@@ -504,6 +516,42 @@ public sealed class LibCurlImpersonateExecutor(
         var getInfoResult = CurlNative.EasyGetInfoLong(easyHandle, CurlInfo.ResponseCode, out var statusCodeLong);
         EnsureSuccess(getInfoResult, "curl_easy_getinfo(CURLINFO_RESPONSE_CODE)");
         return checked((int)statusCodeLong);
+    }
+
+    private static Version GetProtocolVersion(IntPtr easyHandle)
+    {
+        var getInfoResult = CurlNative.EasyGetInfoLong(easyHandle, CurlInfo.HttpVersion, out var protocolVersionLong);
+        if (getInfoResult != CurlCode.Ok)
+            return HttpVersion.Version11;
+
+        return TryMapProtocolVersion(protocolVersionLong, out var protocolVersion)
+            ? protocolVersion
+            : HttpVersion.Version11;
+    }
+
+    private static bool TryMapProtocolVersion(long protocolVersionLong, out Version protocolVersion)
+    {
+        protocolVersion = HttpVersion.Version11;
+        switch ((CurlHttpVersion)protocolVersionLong)
+        {
+            case CurlHttpVersion.Http1_0:
+                protocolVersion = HttpVersion.Version10;
+                return true;
+            case CurlHttpVersion.Http1_1:
+                protocolVersion = HttpVersion.Version11;
+                return true;
+            case CurlHttpVersion.Http2_0:
+            case CurlHttpVersion.Http2Tls:
+            case CurlHttpVersion.Http2PriorKnowledge:
+                protocolVersion = HttpVersion.Version20;
+                return true;
+            case CurlHttpVersion.Http3:
+            case CurlHttpVersion.Http3Only:
+                protocolVersion = HttpVersion.Version30;
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static bool TryGetContentLength(IReadOnlyList<CurlImpersonateHeader> headers, out int contentLength)
@@ -844,10 +892,14 @@ public sealed class LibCurlImpersonateExecutor(
                 return;
             }
 
-            var (statusCode, reasonPhrase, headers) = CurlResponseHeaderParser.Parse(state.RawHeaderLines);
+            var (statusCode, reasonPhrase, protocolVersion, headers) = CurlResponseHeaderParser.Parse(state.RawHeaderLines);
             if (statusCode >= 200)
             {
-                state.HeadersReady.TrySetResult(new HeaderSnapshot(statusCode, reasonPhrase, headers));
+                state.HeadersReady.TrySetResult(new HeaderSnapshot(
+                    statusCode,
+                    reasonPhrase,
+                    protocolVersion ?? HttpVersion.Version11,
+                    headers));
             }
         });
     }
@@ -1293,6 +1345,7 @@ public sealed class LibCurlImpersonateExecutor(
     private readonly record struct HeaderSnapshot(
         int StatusCode,
         string ReasonPhrase,
+        Version ProtocolVersion,
         IReadOnlyList<CurlImpersonateHeader> Headers);
 
     private readonly record struct RequestLogContext(
@@ -1322,12 +1375,19 @@ public sealed class LibCurlImpersonateExecutor(
 
     private enum CurlHttpVersion
     {
+        Http1_0 = 1,
+        Http1_1 = 2,
         Http2_0 = 3,
+        Http2Tls = 4,
+        Http2PriorKnowledge = 5,
+        Http3 = 30,
+        Http3Only = 31,
     }
 
     private enum CurlInfo
     {
         ResponseCode = 0x200002,
+        HttpVersion = 0x20002e,
     }
 
     private enum CurlOption
@@ -1354,6 +1414,7 @@ public sealed class LibCurlImpersonateExecutor(
         NoProgress = 43,
         XferInfoData = 10057,
         XferInfoFunction = 20219,
+        Verbose = 41,
     }
 
     private static class CurlNative
