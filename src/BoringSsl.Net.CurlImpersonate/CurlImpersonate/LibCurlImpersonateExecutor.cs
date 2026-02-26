@@ -178,6 +178,11 @@ public sealed class LibCurlImpersonateExecutor(
             var resolvedTarget = ResolveImpersonationTarget(request.ImpersonateTarget);
             var impersonateResult = TryImpersonate(easyHandle, resolvedTarget);
             EnsureSuccess(impersonateResult, "curl_easy_impersonate");
+
+            // curl_easy_impersonate 可能覆盖了 HTTP 版本设置，
+            // 在 impersonate 之后重新强制 HTTP/2
+            SetOpt(easyHandle, CurlOption.HttpVersion, (long)CurlHttpVersion.Http2_0);
+
             return transfer;
         }
         catch
